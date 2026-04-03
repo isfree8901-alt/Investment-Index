@@ -1,0 +1,20 @@
+{
+  "hosting": {
+    "public": "hosting_placeholder",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "YOUR_CLOUD_RUN_SERVICE",
+          "region": "YOUR_REGION",
+          "pinTag": true
+        }
+      }
+    ]
+  }
+}
