@@ -1161,36 +1161,53 @@ def fetch_latest_ism_pmi_public() -> dict:
         return {}
     
 
-@st.cache_data(ttl=60 * 60)
+@st.cache_data(ttl=60 * 30)
 def fetch_latest_expectations_public() -> dict:
     try:
-        res = requests.get(CONFERENCE_BOARD_CONFIDENCE_URL, headers=REQUEST_HEADERS, timeout=20)
+        res = requests.get(
+            "https://www.conference-board.org/topics/consumer-confidence/index.cfm",
+            headers=REQUEST_HEADERS,
+            timeout=20,
+        )
         res.raise_for_status()
-        text = res.text
 
+        text = html.unescape(res.text)
+        text = re.sub(r"\s+", " ", text)
+
+        # 1순위: 공식 문장 그대로 탐색
+        # 예: "The Expectations Index ... declined by 1.7 points to 70.9."
         patterns = [
-            r"The Expectations Index.*?to\s+([0-9]+(?:\.[0-9]+)?)\.",
-            r"Expectations Index.*?to\s+([0-9]+(?:\.[0-9]+)?)\.",
-            r"expectations.*?index.*?([0-9]+(?:\.[0-9]+)?)",
+            r"The Expectations Index[^.]*?to\s+([0-9]+(?:\.[0-9]+)?)\.",
+            r"Expectations Index[^.]*?to\s+([0-9]+(?:\.[0-9]+)?)\.",
+            r"Expectations Index\s*[—-][^.]*?declined[^.]*?to\s+([0-9]+(?:\.[0-9]+)?)\.",
         ]
 
         value = None
         for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-            if match:
-                value = float(match.group(1))
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                value = float(m.group(1))
                 break
 
         if value is None:
             return {}
 
+        # 날짜도 같이 뽑기
+        date_match = re.search(
+            r"Updated:\s*[A-Za-z]+,\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})",
+            text,
+            re.IGNORECASE,
+        )
+        release_date = date_match.group(1) if date_match else ""
+
         return {
+            "label": "컨퍼런스보드 소비자 기대지수 (CBEI)",
             "value": value,
-            "label": "컨퍼런스보드 소비자기대지수",
-            "source": "The Conference Board 공개 페이지",
-            "link": CONFERENCE_BOARD_CONFIDENCE_URL,
-            "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "The Conference Board 공식 페이지",
+            "link": "https://www.conference-board.org/topics/consumer-confidence/index.cfm",
+            "release_date": release_date,
         }
+
     except Exception:
         return {}
 
