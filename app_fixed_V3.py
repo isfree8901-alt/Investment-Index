@@ -1282,13 +1282,15 @@ def render_manual_update_helper() -> None:
         st.divider()
 
         st.markdown("##### 2) 소비자기대지수")
-        if exp_info:
-            st.success(f"최신 조회값: {exp_info['value']}")
+        if exp_info.get("value") is not None:
+            st.success(f"최신 조회값: {float(exp_info['value']):.1f}")
             st.caption(f"출처: {exp_info['source']} / 조회시각: {exp_info.get('fetched_at', '-') }")
             st.link_button("Conference Board 원문 보기", exp_info["link"], use_container_width=True)
-            st.code(f"{pd.Timestamp.today().strftime('%Y-%m-01')},{exp_info['value']}", language="text")
+            st.code(f"{pd.Timestamp.today().strftime('%Y-%m-01')},{float(exp_info['value']):.1f}", language="text")
         else:
             st.warning("소비자기대지수 최신 수치를 자동 조회하지 못했습니다.")
+            if exp_info.get("error"):
+                st.caption(f"오류: {exp_info['error']}")
             st.link_button("Conference Board 원문 보기", CONFERENCE_BOARD_CONFIDENCE_URL, use_container_width=True)
  
 
@@ -1673,7 +1675,7 @@ def main() -> None:
             "Expectations Index",
         )
         latest_exp_auto = fetch_latest_expectations_public()
-        if latest_exp_auto and not expectations_df.empty:
+        if latest_exp_auto.get("value") is not None and not expectations_df.empty:
             csv_current_exp = float(expectations_df.iloc[-1]["value"])
             auto_current_exp = float(latest_exp_auto["value"])
             if abs(csv_current_exp - auto_current_exp) > 0.01:
