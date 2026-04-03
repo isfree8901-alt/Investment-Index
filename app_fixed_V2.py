@@ -19,6 +19,11 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+REQUEST_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "en-US,en;q=0.9,ko-KR;q=0.8",
+}
+
 st.set_page_config(
     page_title="US Macro Regime Dashboard",
     page_icon="📈",
@@ -1003,78 +1008,70 @@ def state_badge(state: str) -> str:
 
 @st.cache_data(ttl=60 * 60)
 def fetch_latest_ism_pmi_public() -> dict:
-    """
-    ISM 공식 공개 페이지에서 최신 Manufacturing PMI 수치를 추출합니다.
-    실패 시 None 반환.
-    """
     try:
         res = requests.get(ISM_PMI_CURRENT_URL, headers=REQUEST_HEADERS, timeout=20)
         res.raise_for_status()
-        html_text = res.text
+        text = res.text
 
-        # "Manufacturing PMI® at 52.7%" 형태 우선 추출
-        match = re.search(r"Manufacturing PMI(?:®)?\s+at\s+([0-9]+(?:\.[0-9]+)?)%", html_text, re.IGNORECASE)
-        if match:
-            value = float(match.group(1))
+        patterns = [
+            r"Manufacturing PMI(?:®)?\s+at\s+([0-9]+(?:\.[0-9]+)?)%",
+            r"PMI(?:®)?\s+at\s+([0-9]+(?:\.[0-9]+)?)%",
+            r"manufacturing sector.*?([0-9]+(?:\.[0-9]+)?)%",
+        ]
 
-            # 최신 상세 보고서 링크 추출
-            link_match = re.search(
-                r'href="([^"]*/reports/ism-pmi-reports/pmi/[^"]+/?)"',
-                html_text,
-                re.IGNORECASE
-            )
+        value = None
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                value = float(match.group(1))
+                break
 
-            detail_link = ""
-            if link_match:
-                href = link_match.group(1)
-                if href.startswith("http"):
-                    detail_link = href
-                else:
-                    detail_link = "https://www.ismworld.org" + href
+        if value is None:
+            return {}
 
-            return {
-                "value": value,
-                "label": "ISM 제조업 구매관리자지수(PMI)",
-                "source": "ISM 공식 페이지",
-                "link": detail_link or ISM_PMI_CURRENT_URL,
-                "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
+        detail_link = ISM_PMI_CURRENT_URL
 
-        return {}
+        return {
+            "value": value,
+            "label": "ISM 제조업 구매관리자지수(PMI)",
+            "source": "ISM 공식 페이지",
+            "link": detail_link,
+            "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
     except Exception:
         return {}
     
 
 @st.cache_data(ttl=60 * 60)
 def fetch_latest_expectations_public() -> dict:
-    """
-    Conference Board 공개 페이지에서 Expectations Index 최신 값을 추출합니다.
-    실패 시 None 반환.
-    """
     try:
         res = requests.get(CONFERENCE_BOARD_CONFIDENCE_URL, headers=REQUEST_HEADERS, timeout=20)
         res.raise_for_status()
-        html_text = res.text
+        text = res.text
 
-        # 공개 본문 예:
-        # "The Expectations Index ... declined by 1.7 points to 70.9."
-        match = re.search(
+        patterns = [
             r"The Expectations Index.*?to\s+([0-9]+(?:\.[0-9]+)?)\.",
-            html_text,
-            re.IGNORECASE | re.DOTALL
-        )
+            r"Expectations Index.*?to\s+([0-9]+(?:\.[0-9]+)?)\.",
+            r"expectations.*?index.*?([0-9]+(?:\.[0-9]+)?)",
+        ]
 
-        if match:
-            value = float(match.group(1))
-            return {
-                "value": value,
-                "label": "컨퍼런스보드 소비자 기대지수(Expectations Index)",
-                "source": "The Conference Board 공개 페이지",
-                "link": CONFERENCE_BOARD_CONFIDENCE_URL,
-                "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
+        value = None
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                value = float(match.group(1))
+                break
 
-        return {}
+        if value is None:
+            return {}
+
+        return {
+            "value": value,
+            "label": "컨퍼런스보드 소비자기대지수",
+            "source": "The Conference Board 공개 페이지",
+            "link": CONFERENCE_BOARD_CONFIDENCE_URL,
+            "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
     except Exception:
         return {}
 
@@ -1087,33 +1084,29 @@ def render_manual_update_helper() -> None:
 
     with st.container(border=True):
         st.markdown("#### 선행지표 자동 조회 결과")
-        st.caption("아래 값은 공식 공개 페이지에서 읽어온 참고용 수치입니다. 최종 CSV 반영은 직접 확인 후 업데이트해주세요.")
+        st.caption("자동 조회가 실패하면 원문 링크를 열어 최신 수치를 확인한 뒤 CSV에 직접 반영해주세요.")
 
+        st.markdown("##### 1) ISM 제조업 PMI")
         if pmi_info:
-            st.markdown(f"**PMI**: {pmi_info['value']}")
+            st.success(f"최신 조회값: {pmi_info['value']}")
             st.caption(f"출처: {pmi_info['source']} / 조회시각: {pmi_info['fetched_at']}")
-            if pmi_info.get("link"):
-                st.link_button("ISM 원문 보기", pmi_info["link"], use_container_width=False)
-
-            pmi_csv = f"{pd.Timestamp.today().strftime('%Y-%m-01')},{pmi_info['value']}"
-            st.code(pmi_csv, language="text")
-
+            st.link_button("ISM 원문 보기", pmi_info["link"], use_container_width=True)
+            st.code(f"{pd.Timestamp.today().strftime('%Y-%m-01')},{pmi_info['value']}", language="text")
         else:
             st.warning("PMI 최신 수치를 자동 조회하지 못했습니다.")
+            st.link_button("ISM 원문 보기", ISM_PMI_CURRENT_URL, use_container_width=True)
 
         st.divider()
 
+        st.markdown("##### 2) 소비자기대지수")
         if exp_info:
-            st.markdown(f"**소비자기대지수**: {exp_info['value']}")
+            st.success(f"최신 조회값: {exp_info['value']}")
             st.caption(f"출처: {exp_info['source']} / 조회시각: {exp_info['fetched_at']}")
-            if exp_info.get("link"):
-                st.link_button("Conference Board 원문 보기", exp_info["link"], use_container_width=False)
-
-            exp_csv = f"{pd.Timestamp.today().strftime('%Y-%m-01')},{exp_info['value']}"
-            st.code(exp_csv, language="text")
-
+            st.link_button("Conference Board 원문 보기", exp_info["link"], use_container_width=True)
+            st.code(f"{pd.Timestamp.today().strftime('%Y-%m-01')},{exp_info['value']}", language="text")
         else:
             st.warning("소비자기대지수 최신 수치를 자동 조회하지 못했습니다.")
+            st.link_button("Conference Board 원문 보기", CONFERENCE_BOARD_CONFIDENCE_URL, use_container_width=True)
  
 
 def plot_series(df: pd.DataFrame, y: str, title: str, hline: Optional[float] = None) -> None:
