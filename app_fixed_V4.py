@@ -9,7 +9,6 @@ import textwrap
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote
 from datetime import datetime
 
 import numpy as np
@@ -39,6 +38,11 @@ FRED_API_BASE = "https://api.stlouisfed.org/fred/series/observations"
 DEFAULT_START_DATE = "2005-01-01"
 ISM_PMI_CURRENT_URL = "https://www.ismworld.org/supply-management-news-and-reports/reports/ism-pmi-reports/"
 CONFERENCE_BOARD_CONFIDENCE_URL = "https://www.conference-board.org/topics/consumer-confidence/index.cfm"
+APP_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(APP_DIR, "data")
+OFFICIAL_PMI_CSV_PATH = os.path.join(DATA_DIR, "pmi_official.csv")
+OFFICIAL_EXPECTATIONS_CSV_PATH = os.path.join(DATA_DIR, "consumer_expectations_official.csv")
+
 
 UPDATE_CYCLE_NOTES = {
     "pmi": "업데이트: 매월 1회",
@@ -588,60 +592,80 @@ def load_demo_pmi() -> pd.DataFrame:
     return pd.DataFrame({"date": dates, "value": values})
 
 
-def build_manual_series_input(
-    series_name: str,
-    base_df: pd.DataFrame,
-    latest_auto_value: Optional[float] = None,
-    latest_auto_label: str = "자동 조회 최신값",
-) -> pd.DataFrame:
-    base_df = base_df[["date", "value"]].copy()
-    base_df["date"] = pd.to_datetime(base_df["date"], errors="coerce")
-    base_df["value"] = pd.to_numeric(base_df["value"], errors="coerce")
-    base_df = base_df.dropna().sort_values("date").reset_index(drop=True)
 
-    if base_df.empty:
-        return base_df
+def ensure_parent_dir(path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    latest_row = base_df.iloc[-1]
-    latest_month = pd.to_datetime(latest_row["date"]).to_period("M").to_timestamp()
-    current_value = float(latest_row["value"])
-    default_value = float(latest_auto_value) if latest_auto_value is not None else current_value
 
-    st.caption(f"{series_name} 최신 월 값을 직접 입력하면 즉시 전체 계산에 반영됩니다.")
-    input_col1, input_col2 = st.columns([1.1, 1.2])
-    with input_col1:
-        manual_month = st.date_input(
-            f"{series_name} 기준 월",
-            value=latest_month.date(),
-            key=f"{series_name}_manual_month",
-            help="해당 월의 값이 기존 데이터와 같으면 덮어쓰고, 더 최근 월이면 추가합니다.",
+def save_uploaded_csv(uploaded_file, persist_path: str) -> None:
+    ensure_parent_dir(persist_path)
+    with open(persist_path, "wb") as f:
+        f.write(uploaded_file.getvalue())
+    load_sample_csv.clear()
+
+
+def load_persisted_csv(path: str) -> pd.DataFrame:
+    return load_sample_csv(path)
+
+
+def delete_persisted_csv(path: str) -> None:
+    if os.path.exists(path):
+        os.remove(path)
+    load_sample_csv.clear()
+
+
+def resolve_official_series(
+    uploaded_file,
+    official_path: str,
+    label: str,
+) -> Tuple[pd.DataFrame, str]:
+    try:
+        if uploaded_file is not None:
+            save_uploaded_csv(uploaded_file, official_path)
+            return load_persisted_csv(official_path), "이번 실행에서 업로드한 정식 CSV"
+        if os.path.exists(official_path):
+            return load_persisted_csv(official_path), "GitHub data 폴더의 정식 CSV"
+        raise FileNotFoundError(
+            f"{label} 정식 CSV가 data 폴더에 없습니다. data/{os.path.basename(official_path)} 파일을 준비하거나 화면에서 업로드해 주세요."
         )
-    with input_col2:
-        manual_value = st.number_input(
-            f"{series_name} 값",
-            value=round(default_value, 2),
-            step=0.1,
-            format="%.2f",
-            key=f"{series_name}_manual_value",
-        )
+    except Exception as exc:
+        raise RuntimeError(f"{label} 데이터 로딩 실패: {exc}") from exc
 
-    manual_month_ts = pd.Timestamp(manual_month).to_period("M").to_timestamp()
 
-    info_parts = [f"현재 반영값 {current_value:.2f}"]
-    if latest_auto_value is not None:
-        info_parts.append(f"{latest_auto_label} {float(latest_auto_value):.2f}")
-    st.caption(" / ".join(info_parts))
+def render_series_upload_manager(
+    title: str,
+    uploader_key: str,
+    official_path: str,
+    help_text: str,
+):
+    st.subheader(title)
+    st.caption(help_text)
+    uploaded = st.file_uploader(f"{title} CSV 업로드", type=["csv"], key=uploader_key)
 
-    result_df = base_df[base_df["date"].dt.to_period("M") != manual_month_ts.to_period("M")].copy()
-    manual_row = pd.DataFrame({"date": [manual_month_ts], "value": [float(manual_value)]})
-    result_df = pd.concat([result_df, manual_row], ignore_index=True)
-    result_df = result_df.sort_values("date").reset_index(drop=True)
+    status_parts = [f"기준 파일: data/{os.path.basename(official_path)}"]
+    if os.path.exists(official_path):
+        modified_at = datetime.fromtimestamp(os.path.getmtime(official_path)).strftime("%Y-%m-%d %H:%M:%S")
+        status_parts.append(f"현재 저장본 있음 ({modified_at})")
+    else:
+        status_parts.append("현재 저장본 없음")
 
-    applied_note = "덮어쓰기" if manual_month_ts <= latest_month else "추가"
-    st.caption(
-        f"즉시 반영 중: {manual_month_ts.strftime('%Y-%m')} = {float(manual_value):.2f} ({applied_note})"
-    )
-    return result_df
+    if uploaded is not None:
+        status_parts.append(f"이번 실행에서 새 파일 선택: {uploaded.name}")
+
+    st.caption(" / ".join(status_parts))
+
+    if os.path.exists(official_path):
+        with open(official_path, "rb") as f:
+            st.download_button(
+                f"현재 기준 {title} CSV 다운로드",
+                data=f.read(),
+                file_name=os.path.basename(official_path),
+                mime="text/csv",
+                use_container_width=True,
+                key=f"download_{uploader_key}",
+            )
+
+    return uploaded
 
 
 def latest(df: pd.DataFrame) -> Tuple[float, float, pd.Series]:
@@ -1194,12 +1218,10 @@ def fetch_latest_ism_pmi_public() -> dict:
         return {}
     
 
+
 @st.cache_data(ttl=60 * 30)
 def fetch_latest_expectations_public() -> dict:
-    """
-    Conference Board 페이지에서 Expectations Index(CBEI)를 추출합니다.
-    디버깅을 위해 매칭 문장과 일부 본문 스니펫도 함께 반환합니다.
-    """
+    """Conference Board 공개 페이지에서 Consumer Expectations Index를 강건하게 추출합니다."""
     try:
         res = requests.get(
             CONFERENCE_BOARD_CCI_URL,
@@ -1208,86 +1230,71 @@ def fetch_latest_expectations_public() -> dict:
         )
         res.raise_for_status()
 
-        raw_text = html.unescape(res.text)
-        text = re.sub(r"\s+", " ", raw_text)
+        raw_html = html.unescape(res.text)
+        text_plain = strip_html_tags(raw_html)
+        text_compact = re.sub(r"\s+", " ", text_plain).replace("—", "-").replace("–", "-").replace("®", "")
+        raw_compact = re.sub(r"\s+", " ", raw_html).replace("—", "-").replace("–", "-").replace("®", "")
 
-        sentence_patterns = [
-            r"The Expectations Index.*?(?:<|\.|;)",
-            r"Expectations Index.*?(?:<|\.|;)",
-        ]
-
-        matched_sentence = ""
-        for pattern in sentence_patterns:
-            m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-            if m:
-                matched_sentence = m.group(0)
-                break
-
-        if not matched_sentence:
-            idx = text.lower().find("expectations index")
-            if idx != -1:
-                matched_sentence = text[max(0, idx - 40): idx + 240]
+        def extract_index_value(label: str, haystack: str) -> Tuple[Optional[float], str]:
+            label_pattern = rf"{label}(?:\s*Index)?"
+            patterns = [
+                rf"({label_pattern}[^.]{{0,260}}?(?:increased|decreased|rose|fell|declined|improved|advanced|slipped|edged up|edged down)[^.]{{0,140}}?to\s+([0-9]+(?:\.[0-9]+)?))",
+                rf"({label_pattern}[^.]{{0,260}}?to\s+([0-9]+(?:\.[0-9]+)?))",
+                rf"({label_pattern}[^0-9]{{0,120}}?([0-9]+(?:\.[0-9]+)?))",
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, haystack, re.IGNORECASE)
+                if match:
+                    try:
+                        return float(match.group(2)), match.group(1)
+                    except Exception:
+                        pass
+            return None, ""
 
         value = None
-        if matched_sentence:
-            value_match = re.search(r"\bto\s+([0-9]+(?:\.[0-9]+)?)\b", matched_sentence, re.IGNORECASE)
-            if value_match:
-                value = float(value_match.group(1))
-
-        if value is None:
-            fallback_patterns = [
-                r"The Expectations Index[^0-9]{0,80}?(?:increased|decreased|rose|fell|declined)[^0-9]{0,40}?[0-9]+(?:\.[0-9]+)?[^0-9]{0,20}?to\s+([0-9]+(?:\.[0-9]+)?)",
-                r"Expectations Index[^0-9]{0,80}?(?:increased|decreased|rose|fell|declined)[^0-9]{0,40}?[0-9]+(?:\.[0-9]+)?[^0-9]{0,20}?to\s+([0-9]+(?:\.[0-9]+)?)",
-                r"Expectations Index[^0-9]{0,120}?to\s+([0-9]+(?:\.[0-9]+)?)",
-            ]
-            for pattern in fallback_patterns:
-                m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-                if m:
-                    value = float(m.group(1))
-                    if not matched_sentence:
-                        matched_sentence = m.group(0)
-                    break
-
         cci_value = None
-        cci_match = re.search(
-            r"Consumer Confidence Index[^.]{0,160}?\bto\s+([0-9]+(?:\.[0-9]+)?)\b",
-            text,
-            re.IGNORECASE,
-        )
-        if cci_match:
-            cci_value = float(cci_match.group(1))
-
         psi_value = None
-        psi_match = re.search(
-            r"Present Situation Index[^.]{0,160}?\bto\s+([0-9]+(?:\.[0-9]+)?)\b",
-            text,
-            re.IGNORECASE,
-        )
-        if psi_match:
-            psi_value = float(psi_match.group(1))
+        matched_sentence = ""
+        search_source = ""
 
-        date_match = re.search(
+        for source_name, haystack in (("plain_text", text_compact), ("raw_html", raw_compact)):
+            if value is None:
+                value, matched_sentence = extract_index_value("Expectations", haystack)
+                if value is not None:
+                    search_source = source_name
+            if cci_value is None:
+                cci_value, _ = extract_index_value("Consumer Confidence", haystack)
+            if psi_value is None:
+                psi_value, _ = extract_index_value("Present Situation", haystack)
+
+        release_date = ""
+        for pattern in [
             r"Updated:\s*[A-Za-z]+,\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})",
-            text,
-            re.IGNORECASE,
-        )
-        release_date = date_match.group(1) if date_match else ""
+            r"Latest Press Release Updated:\s*[A-Za-z]+,\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})",
+        ]:
+            match = re.search(pattern, raw_compact, re.IGNORECASE)
+            if match:
+                release_date = match.group(1)
+                break
 
-        snippet = ""
-        anchor = text.lower().find("expectations index")
+        snippet = matched_sentence
+        anchor = text_compact.lower().find("expectations index")
         if anchor != -1:
-            snippet = text[max(0, anchor - 80): anchor + 280]
+            snippet = text_compact[max(0, anchor - 120): anchor + 320]
 
         if value is None:
             return {
                 "label": "컨퍼런스보드 소비자 기대지수 (CBEI)",
                 "value": None,
+                "cci_value": cci_value,
+                "present_situation_value": psi_value,
                 "source": "Conference Board",
                 "link": CONFERENCE_BOARD_CCI_URL,
                 "update_cycle": "매월 1회",
                 "release_date": release_date,
                 "matched_sentence": matched_sentence,
                 "debug_snippet": snippet,
+                "search_source": search_source,
                 "error": "Expectations Index 값을 찾지 못했습니다.",
             }
 
@@ -1302,6 +1309,7 @@ def fetch_latest_expectations_public() -> dict:
             "release_date": release_date,
             "matched_sentence": matched_sentence,
             "debug_snippet": snippet,
+            "search_source": search_source,
             "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
@@ -1323,7 +1331,7 @@ def render_manual_update_helper() -> None:
 
     with st.container(border=True):
         st.markdown("#### 선행지표 자동 조회 결과")
-        st.caption("자동 조회가 실패하면 원문 링크를 열어 최신 수치를 확인한 뒤 아래 직접 입력란에 반영해주세요.")
+        st.caption("자동 조회가 실패하면 원문 링크를 열어 최신 수치를 확인한 뒤 정식 CSV를 업데이트해 주세요.")
 
         st.markdown("##### 1) ISM 제조업 PMI")
         if pmi_info:
@@ -1499,13 +1507,6 @@ def build_downloadable_snapshot(ranked_assets: pd.DataFrame, signals: Dict[str, 
     return pd.DataFrame(rows)
 
 
-def resolve_csv_input(sample_path: str, use_sample: bool, demo_loader, label: str):
-    try:
-        if use_sample and os.path.exists(sample_path):
-            return load_sample_csv(sample_path), "프로젝트 샘플 CSV"
-        return demo_loader(), f"{label} 데모 데이터"
-    except Exception as exc:
-        raise RuntimeError(f"{label} 데이터 로딩 실패: {exc}") from exc
 
 
 def strip_html_tags(text: str) -> str:
@@ -1682,13 +1683,19 @@ def main() -> None:
         else:
             st.warning("FRED API Key가 없습니다. .streamlit/secrets.toml 또는 환경변수에 FRED_API_KEY를 넣어주세요.")
 
-        st.subheader("제조업 PMI 입력")
-        st.caption("CSV 업로드 없이 최신 월 값을 직접 입력할 수 있습니다.")
-        use_sample_pmi = st.checkbox("PMI 샘플/데모 사용", value=True)
+        pmi_uploaded = render_series_upload_manager(
+            title="제조업 PMI",
+            uploader_key="pmi_official_upload",
+            official_path=OFFICIAL_PMI_CSV_PATH,
+            help_text="항상 GitHub data 폴더의 정식 CSV(data/pmi_official.csv)를 기준으로 사용합니다. 새 CSV를 올리면 이 기준 파일을 덮어씁니다.",
+        )
 
-        st.subheader("소비자 기대지수 입력")
-        st.caption("CSV 업로드 없이 최신 월 값을 직접 입력할 수 있습니다.")
-        use_sample_expectations = st.checkbox("Expectations 샘플/데모 사용", value=True)
+        expectations_uploaded = render_series_upload_manager(
+            title="소비자 기대지수",
+            uploader_key="expectations_official_upload",
+            official_path=OFFICIAL_EXPECTATIONS_CSV_PATH,
+            help_text="항상 GitHub data 폴더의 정식 CSV(data/consumer_expectations_official.csv)를 기준으로 사용합니다. 새 CSV를 올리면 이 기준 파일을 덮어씁니다.",
+        )
 
         st.divider()
         with st.expander("PMI / 소비자기대지수 자동 조회 참고", expanded=False):
@@ -1710,62 +1717,45 @@ def main() -> None:
         st.exception(exc)
         st.stop()
 
-    pmi_sample_path = os.path.join(os.path.dirname(__file__), "data", "pmi_sample.csv")
-    expectations_path = os.path.join(os.path.dirname(__file__), "data", "conference_board_expectations_sample.csv")
-
     try:
-        pmi_df, pmi_source = resolve_csv_input(
-            pmi_sample_path,
-            use_sample_pmi,
-            load_demo_pmi,
+        pmi_df, pmi_source = resolve_official_series(
+            pmi_uploaded,
+            OFFICIAL_PMI_CSV_PATH,
             "PMI",
         )
-        expectations_df, expectations_source = resolve_csv_input(
-            expectations_path,
-            use_sample_expectations,
-            load_demo_expectations,
+        expectations_df, expectations_source = resolve_official_series(
+            expectations_uploaded,
+            OFFICIAL_EXPECTATIONS_CSV_PATH,
             "Expectations Index",
         )
 
         latest_pmi_auto = fetch_latest_ism_pmi_public()
         latest_exp_auto = fetch_latest_expectations_public()
 
-        st.sidebar.divider()
-        st.sidebar.subheader("즉시 반영 수동 입력")
-        with st.sidebar.expander("PMI 직접 입력", expanded=True):
-            pmi_df = build_manual_series_input(
-                "PMI",
-                pmi_df,
-                latest_auto_value=latest_pmi_auto.get("value"),
-                latest_auto_label="ISM 자동 조회값",
-            )
-            pmi_source = "사이드바 직접 입력"
+        if pmi_uploaded is not None:
+            st.sidebar.success("PMI 정식 CSV를 data/pmi_official.csv 기준 파일로 저장했습니다.")
+        else:
+            st.sidebar.info("PMI는 GitHub data 폴더의 정식 CSV를 사용 중입니다.")
 
-        with st.sidebar.expander("소비자 기대지수 직접 입력", expanded=True):
-            expectations_df = build_manual_series_input(
-                "소비자 기대지수",
-                expectations_df,
-                latest_auto_value=latest_exp_auto.get("value"),
-                latest_auto_label="Conference Board 자동 조회값",
-            )
-            expectations_source = "사이드바 직접 입력"
+        if expectations_uploaded is not None:
+            st.sidebar.success("소비자 기대지수 정식 CSV를 data/consumer_expectations_official.csv 기준 파일로 저장했습니다.")
+        else:
+            st.sidebar.info("소비자 기대지수는 GitHub data 폴더의 정식 CSV를 사용 중입니다.")
 
         if latest_exp_auto.get("value") is not None and not expectations_df.empty:
-            input_current_exp = float(expectations_df.iloc[-1]["value"])
+            csv_current_exp = float(expectations_df.iloc[-1]["value"])
             auto_current_exp = float(latest_exp_auto["value"])
-            if abs(input_current_exp - auto_current_exp) > 0.01:
+            if abs(csv_current_exp - auto_current_exp) > 0.01:
                 st.warning(
-                    f"직접 입력된 소비자 기대지수 값({input_current_exp:.1f})과 자동조회 값({auto_current_exp:.1f})이 다릅니다. "
-                    "의도한 값이면 그대로 사용하셔도 됩니다."
+                    f"소비자 기대지수 CSV 값({csv_current_exp:.1f})과 자동조회 값({auto_current_exp:.1f})이 다릅니다. 최신 정식 CSV 반영 여부를 확인해주세요."
                 )
 
         if latest_pmi_auto.get("value") is not None and not pmi_df.empty:
-            input_current_pmi = float(pmi_df.iloc[-1]["value"])
+            csv_current_pmi = float(pmi_df.iloc[-1]["value"])
             auto_current_pmi = float(latest_pmi_auto["value"])
-            if abs(input_current_pmi - auto_current_pmi) > 0.01:
-                st.info(
-                    f"직접 입력된 PMI 값({input_current_pmi:.1f})이 자동조회 값({auto_current_pmi:.1f})과 다릅니다. "
-                    "수정값이 즉시 전체 계산에 반영됩니다."
+            if abs(csv_current_pmi - auto_current_pmi) > 0.01:
+                st.warning(
+                    f"PMI CSV 값({csv_current_pmi:.1f})과 자동조회 값({auto_current_pmi:.1f})이 다릅니다. 최신 정식 CSV 반영 여부를 확인해주세요."
                 )
 
     except Exception as exc:
@@ -1844,7 +1834,7 @@ def main() -> None:
 
     st.divider()
     st.subheader("선행지표")
-    st.caption("※ ISM 제조업 PMI와 컨퍼런스보드 소비자 기대지수는 사이드바 직접 입력값이 즉시 반영됩니다.")
+    st.caption("※ ISM 제조업 PMI와 컨퍼런스보드 소비자 기대지수는 업로드한 정식 CSV 기준으로 반영됩니다. 최신 월간 수치가 포함됐는지 함께 확인해주세요.")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         render_signal_card(signals["pmi"], "선행지표", "{:.1f}")
