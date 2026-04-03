@@ -134,6 +134,7 @@ class IndicatorSignal:
     reason: str
     market_impact: str
     threshold_note: str
+    buy_idea: str
 
 
 def inject_global_style() -> None:
@@ -367,6 +368,37 @@ def inject_global_style() -> None:
     )
 
 
+def translate_text_to_korean(text: str) -> str:
+    """
+    간단 번역 함수
+    - 외부 API 없이 기본 동작
+    - 실패 시 원문 그대로 반환
+    """
+    try:
+        # 무료 번역 (Google unofficial endpoint)
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl": "en",
+            "tl": "ko",
+            "dt": "t",
+            "q": text,
+        }
+
+        res = requests.get(url, params=params, timeout=5)
+        if res.status_code != 200:
+            return text
+
+        data = res.json()
+
+        # 번역 결과 조합
+        translated = "".join([item[0] for item in data[0]])
+        return translated
+
+    except Exception:
+        return text
+    
+
 def fetch_fred_series(series_id: str, api_key: str, start_date: str = DEFAULT_START_DATE) -> pd.DataFrame:
     params = {
         "series_id": series_id,
@@ -516,6 +548,7 @@ def pmi_signal(df: pd.DataFrame) -> IndicatorSignal:
         reason=reason,
         market_impact=impact,
         threshold_note="공식 기준선 50 / 운영 경계선 47",
+        buy_idea="PMI가 개선되면 제조업, 산업재, 반도체, 운송 업종 주식과 관련 ETF(XLI, SOXX, ITA 등)를 우선 검토할 수 있습니다. 반대로 50 하회가 길어지면 방어주나 중장기 국채 ETF 쪽이 더 유리할 수 있습니다.",
     )
 
 
@@ -552,6 +585,7 @@ def expectations_signal(df: pd.DataFrame) -> IndicatorSignal:
         reason=reason,
         market_impact=impact,
         threshold_note="경고선 80 / 운영 강경고 75",
+        buy_idea="소비자 기대지수가 개선되면 소비재, 유통, 여행·레저, 온라인플랫폼 관련 주식 및 ETF(XLY, RTH 등)를 검토할 수 있습니다. 기대지수가 약하면 필수소비재(XLP)나 배당주가 상대적으로 방어적일 수 있습니다.",
     )
 
 
@@ -593,6 +627,7 @@ def housing_signal(df: pd.DataFrame) -> IndicatorSignal:
         reason=reason,
         market_impact=impact,
         threshold_note="운영 기준: YoY +5 확장 / -10 이하 경고, 3개월 평균 vs 12개월 평균 보조",
+        buy_idea="주택착공이 회복되면 주택건설, 건자재, 인테리어, 산업용 원자재 관련 종목과 ETF(ITB, XHB, 목재·구리 관련 ETF)를 검토할 수 있습니다. 약세면 리츠와 건설 관련주는 보수적으로 보는 편이 좋습니다.",
     )
 
 
@@ -633,6 +668,7 @@ def spread_signal(df: pd.DataFrame) -> IndicatorSignal:
         reason=reason,
         market_impact=impact,
         threshold_note="핵심 기준선 0 / 운영 기준 +1.00, -0.50",
+        buy_idea="장단기 금리차가 정상화되면 경기민감주와 금융주가 유리할 수 있고, 역전이 심하면 중장기 국채 ETF(TLT, IEF)나 방어주 비중 확대가 더 유리할 수 있습니다.",
     )
 
 
@@ -667,6 +703,7 @@ def unemployment_signal(df: pd.DataFrame) -> IndicatorSignal:
         reason=reason,
         market_impact=impact,
         threshold_note="운영 기준: Sahm Rule 0.50%p 이상 경고",
+        buy_idea="실업률이 안정적이면 대형주, 소비 관련주, 경기민감주 접근이 가능하지만, 실업률이 상승하면 헬스케어, 필수소비재, 유틸리티, 국채 ETF 같은 방어형 자산이 더 유리할 수 있습니다.",
     )
 
 
@@ -703,6 +740,7 @@ def cpi_signal(cpi_df: pd.DataFrame, core_df: pd.DataFrame) -> IndicatorSignal:
         reason=reason,
         market_impact=impact,
         threshold_note="운영 기준: 3% 이상 부담 / 2~3% 완화 / 2% 부근 안정",
+        buy_idea="물가가 높고 끈적이면 금, 에너지, 원자재, 가격전가력이 높은 기업이 유리할 수 있습니다. 물가가 안정되면 성장주, 기술주, 리츠, 장기채 ETF에 우호적인 환경으로 해석할 수 있습니다.",
     )
 
 
@@ -978,8 +1016,23 @@ def plot_series(df: pd.DataFrame, y: str, title: str, hline: Optional[float] = N
 
 
 def render_signal_card(signal: IndicatorSignal, kind: str, value_format: str = "{:.1f}") -> None:
-    st.markdown(f"<div class='signal-card'><div class='signal-kind'>{kind}</div></div>", unsafe_allow_html=True)
-    with st.container(border=False):
+    with st.container(border=True):
+        st.markdown(
+            f"""
+            <div style="
+                display:inline-block;
+                padding:4px 10px;
+                border-radius:999px;
+                background:rgba(91,108,255,0.08);
+                color:{DASHBOARD_COLORS['navy']};
+                font-size:0.78rem;
+                font-weight:700;
+                margin-bottom:10px;
+            ">{kind}</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
         st.markdown(f"#### {signal.label}")
         st.metric(
             label=f"{state_badge(signal.state)} {signal.state}",
@@ -990,32 +1043,65 @@ def render_signal_card(signal: IndicatorSignal, kind: str, value_format: str = "
         st.write(signal.summary)
         st.write(f"**왜 중요한가**: {signal.reason}")
         st.write(f"**시장 해석**: {signal.market_impact}")
+        st.write(f"**매입 고려**: {signal.buy_idea}")
 
 
 def render_asset_ranking(ranked_assets: pd.DataFrame) -> None:
     st.subheader("자산 랭킹")
-    html_blocks = ["<div class='asset-grid'>"]
-    for idx, row in ranked_assets.iterrows():
-        score = int(row["score"])
-        html_blocks.append(
-            f"""
-            <div class="asset-card">
-                <div class="asset-top">
-                    <div>
-                        <div class="asset-rank">#{idx + 1} 우선순위</div>
-                        <div class="asset-name">{row['asset']}</div>
-                    </div>
-                    <div class="asset-grade">{row['grade']}</div>
-                </div>
-                <div class="asset-score">{score}점</div>
-                <div class="asset-stance">{row['stance']}</div>
-                <div class="asset-bar"><div class="asset-fill" style="width:{score}%"></div></div>
-                <div class="asset-drivers">{html.escape(row['drivers'])}</div>
-            </div>
-            """
-        )
-    html_blocks.append("</div>")
-    st.markdown("".join(html_blocks), unsafe_allow_html=True)
+
+    asset_desc_map = {
+        "주식": "경기 회복·실적 개선 기대에 민감",
+        "채권": "경기 둔화·금리 하락 기대에 상대 우호",
+        "금": "불확실성·인플레이션 헤지 성격",
+        "현금/MMF": "대기성 자금 및 변동성 방어",
+        "달러": "리스크오프 구간 방어 자산",
+        "리츠": "금리와 부동산 경기 민감 자산",
+    }
+
+    cards = ranked_assets.reset_index(drop=True)
+
+    for start in range(0, len(cards), 2):
+        cols = st.columns(2)
+        for i in range(2):
+            idx = start + i
+            if idx >= len(cards):
+                continue
+
+            row = cards.iloc[idx]
+
+            with cols[i]:
+                with st.container(border=True):
+                    st.markdown(f"### #{idx + 1}. {row['asset']}")
+                    st.caption(asset_desc_map.get(row["asset"], ""))
+                    c1, c2 = st.columns(2)
+                    with st.container():
+                        st.markdown(
+                            f"""
+                            <div style="
+                                display:flex;
+                                justify-content:space-between;
+                                align-items:center;
+                                text-align:center;
+                                margin-top:8px;
+                                background:#F6FFDC;
+                                border-radius:12px;
+                                padding:10px;
+                            ">
+                                <div style="flex:1;">
+                                    <div style="font-size:0.8rem;color:gray;">점수</div>
+                                    <div style="font-size:1.4rem;font-weight:700;">{int(row['score'])}점</div>
+                                </div>
+                                <div style="flex:1;">
+                                    <div style="font-size:0.8rem;color:gray;">등급</div>
+                                    <div style="font-size:1.4rem;font-weight:700;">{row['grade']}</div>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    st.caption(row["stance"])
+                    st.progress(int(row["score"]))
+                    st.write(row["drivers"])
 
 
 def build_downloadable_snapshot(ranked_assets: pd.DataFrame, signals: Dict[str, IndicatorSignal], regime: str) -> pd.DataFrame:
@@ -1059,74 +1145,99 @@ def resolve_csv_input(uploaded_file, sample_path: str, use_sample: bool, demo_lo
 
 
 def strip_html_tags(text: str) -> str:
-    text = re.sub(r"<[^>]+>", "", text or "")
-    return html.unescape(text).strip()
+    if text is None:
+        return ""
+    text = str(text)
+
+    # CDATA 제거
+    text = text.replace("<![CDATA[", "").replace("]]>", "")
+
+    # br, p 같은 태그 개행 처리
+    text = re.sub(r"<\s*br\s*/?\s*>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p\s*>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<p[^>]*>", " ", text, flags=re.IGNORECASE)
+
+    # 나머지 태그 제거
+    text = re.sub(r"<[^>]+>", "", text)
+
+    # HTML entity 복원
+    text = html.unescape(text)
+
+    # 공백 정리
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
-@st.cache_data(ttl=60 * 30)
-def translate_text_to_korean(text: str) -> str:
-    try:
-        response = requests.get(
-            TRANSLATE_API_URL,
-            params={
-                "client": "gtx",
-                "sl": "auto",
-                "tl": "ko",
-                "dt": "t",
-                "q": text,
-            },
-            headers=REQUEST_HEADERS,
-            timeout=15,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        translated = "".join(part[0] for part in payload[0] if part and part[0])
-        return translated.strip() or text
-    except Exception:
-        return text
-
-
-@st.cache_data(ttl=60 * 30)
+@st.cache_data(ttl=60 * 10)
 def fetch_bloomberg_headlines(limit: int = 10) -> pd.DataFrame:
     response = requests.get(BLOOMBERG_RSS_URL, headers=REQUEST_HEADERS, timeout=20)
     response.raise_for_status()
+
     root = ET.fromstring(response.content)
     items = []
-    for item in root.findall("./channel/item")[:limit]:
-        title = strip_html_tags(item.findtext("title", default=""))
-        link = strip_html_tags(item.findtext("link", default=""))
-        pub_date = strip_html_tags(item.findtext("pubDate", default=""))
+
+    for item in root.findall("./channel/item"):
+        title_raw = item.findtext("title", default="")
+        link_raw = item.findtext("link", default="")
+        pub_date_raw = item.findtext("pubDate", default="")
+
+        title = strip_html_tags(title_raw)
+        link = strip_html_tags(link_raw)
+        pub_date = strip_html_tags(pub_date_raw)
+
+        if not title or not link:
+            continue
+
         translated_title = translate_text_to_korean(title)
+
         items.append(
             {
                 "headline_en": title,
-                "headline_ko": translated_title,
+                "headline_ko": translated_title if translated_title else title,
                 "link": link,
                 "pub_date": pub_date,
             }
         )
+
+        if len(items) >= limit:
+            break
+
     return pd.DataFrame(items)
 
 
 def render_headlines(headlines: pd.DataFrame) -> None:
-    st.subheader("전일 주요 뉴스 헤드라인")
-    st.caption("Bloomberg Markets RSS 기준 최근 헤드라인을 가져와 한글로 표시합니다. 번역이 실패하면 원문을 그대로 노출합니다.")
+    st.subheader("실시간 주요 뉴스 헤드라인")
+    st.caption("조회 시점 기준 Bloomberg 최신 헤드라인입니다. 제목은 한글 번역으로 표시하고, 원문 기사 링크를 함께 제공합니다.")
+
     if headlines.empty:
         st.info("불러온 헤드라인이 없습니다.")
         return
-    lines = ["<div class='headline-card'>"]
-    for idx, row in headlines.iterrows():
-        source_time = row["pub_date"] if row["pub_date"] else "발행시각 미표기"
-        lines.append(
-            f"""
-            <div class='headline-row'>
-                <div class='headline-meta'>#{idx + 1} · Bloomberg · {html.escape(source_time)}</div>
-                <div class='headline-title'>{html.escape(row['headline_ko'])}</div>
-            </div>
-            """
-        )
-    lines.append("</div>")
-    st.markdown("".join(lines), unsafe_allow_html=True)
+
+    with st.container(border=True):
+        for idx, row in headlines.iterrows():
+            title_ko = strip_html_tags(row.get("headline_ko", ""))
+            title_en = strip_html_tags(row.get("headline_en", ""))
+            pub_date = strip_html_tags(row.get("pub_date", ""))
+            link = row.get("link", "")
+
+            st.markdown(f"**{idx + 1}. {title_ko}**")
+
+            if title_en and title_en != title_ko:
+                st.caption(title_en)
+
+            meta_parts = []
+            if pub_date:
+                meta_parts.append(f"발행: {pub_date}")
+            if link:
+                meta_parts.append(f"[원문 링크]({link})")
+
+            if pub_date:
+                st.caption(f"발행: {pub_date}")
+            if link:
+                st.link_button("원문 기사 보기", link, use_container_width=False)
+
+            if idx < len(headlines) - 1:
+                st.divider()
 
 
 def build_macro_summary_box(regime: str, ranked_assets: pd.DataFrame, signals: Dict[str, IndicatorSignal], risk_score: int) -> None:
@@ -1191,9 +1302,9 @@ def plot_dual_inflation_chart(cpi_chart: pd.DataFrame) -> None:
 
 def main() -> None:
     inject_global_style()
-    st.title("미국 선행·후행지표 기반 자산배분 대시보드")
+    st.title("미국 선행·후행지표 기반 자산 배분 검토 대시보드")
     st.markdown(
-        "<div class='section-note'>약어 중심 표기를 한글 설명형 이름으로 바꾸고, 상단 인사이트와 자산 카드형 랭킹, Bloomberg 주요 뉴스 영역을 추가한 버전입니다.</div>",
+        "<div class='section-note'>주요 선행 및 후행지표를 파악, 투자 흐름에 도움을 받을 수 있습니다.</div>",
         unsafe_allow_html=True,
     )
 
@@ -1325,6 +1436,7 @@ def main() -> None:
 
     st.divider()
     st.subheader("선행지표")
+    st.caption("※ ISM 제조업 PMI와 컨퍼런스보드 소비자 기대지수는 관리자 수동 업데이트 항목입니다. 최신 월간 수치 반영 여부를 함께 확인해주세요.")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         render_signal_card(signals["pmi"], "선행지표", "{:.1f}")
