@@ -19,6 +19,10 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+
+TRADING_ECONOMICS_PMI_URL = "https://tradingeconomics.com/united-states/business-confidence"
+TRADING_ECONOMICS_CCI_URL = "https://tradingeconomics.com/united-states/consumer-confidence"
+
 REQUEST_HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept-Language": "en-US,en;q=0.9,ko-KR;q=0.8",
@@ -37,13 +41,14 @@ ISM_PMI_CURRENT_URL = "https://www.ismworld.org/supply-management-news-and-repor
 CONFERENCE_BOARD_CONFIDENCE_URL = "https://www.conference-board.org/topics/consumer-confidence/index.cfm"
 
 UPDATE_CYCLE_NOTES = {
-    "pmi": "업데이트: 매월 첫 영업일 22:00 내외(KST) / 관리자 수동 반영",
-    "expectations": "업데이트: 매월 마지막 화요일 23:00 내외(KST) / 관리자 수동 반영",
-    "housing": "업데이트: 월 1회",
-    "yield_spread": "업데이트: 일 1회 이상",
-    "unemployment": "업데이트: 월 1회",
-    "cpi": "업데이트: 월 1회",
+    "pmi": "업데이트: 매월 1회",
+    "expectations": "업데이트: 매월 1회",
+    "housing": "업데이트: 매월 1회",
+    "yield_spread": "업데이트: 일별",
+    "unemployment": "업데이트: 매월 1회",
+    "cpi": "업데이트: 매월 1회",
 }
+
 LOOKBACK_MONTHS = 36
 BLOOMBERG_RSS_URL = "https://feeds.bloomberg.com/markets/news.rss"
 TRANSLATE_API_URL = "https://translate.googleapis.com/translate_a/single"
@@ -414,7 +419,121 @@ def translate_text_to_korean(text: str) -> str:
 
     except Exception:
         return text
-    
+
+
+@st.cache_data(ttl=60 * 30)
+def fetch_te_pmi_reference() -> dict:
+    try:
+        res = requests.get(
+            TRADING_ECONOMICS_PMI_URL,
+            headers=REQUEST_HEADERS,
+            timeout=20,
+        )
+        res.raise_for_status()
+        text = html.unescape(res.text)
+
+        # 예: "Business Confidence in the United States increased to 52.70 points in March..."
+        match = re.search(
+            r"Business Confidence in the United States .*? to ([0-9]+(?:\.[0-9]+)?) points in ([A-Za-z]+)",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        if not match:
+            return {}
+
+        value = float(match.group(1))
+        period = match.group(2)
+
+        return {
+            "label": "미국 ISM 제조업 PMI",
+            "value": value,
+            "period": period,
+            "unit": "points",
+            "update_cycle": "매월 1회",
+            "source": "Trading Economics",
+            "link": TRADING_ECONOMICS_PMI_URL,
+        }
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=60 * 30)
+def fetch_te_cci_reference() -> dict:
+    try:
+        res = requests.get(
+            TRADING_ECONOMICS_CCI_URL,
+            headers=REQUEST_HEADERS,
+            timeout=20,
+        )
+        res.raise_for_status()
+        text = html.unescape(res.text)
+
+        # 예: "Consumer Confidence in the United States decreased to 53.30 points in March..."
+        match = re.search(
+            r"Consumer Confidence in the United States .*? to ([0-9]+(?:\.[0-9]+)?) points in ([A-Za-z]+)",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        if not match:
+            return {}
+
+        value = float(match.group(1))
+        period = match.group(2)
+
+        return {
+            "label": "미국 소비자심리지수(CCI)",
+            "value": value,
+            "period": period,
+            "unit": "points",
+            "update_cycle": "매월 1회",
+            "source": "Trading Economics",
+            "link": TRADING_ECONOMICS_CCI_URL,
+        }
+    except Exception:
+        return {}
+
+
+def render_te_reference_panel() -> None:
+    pmi_data = fetch_te_pmi_reference()
+    cci_data = fetch_te_cci_reference()
+
+    st.subheader("Trading Economics 자동 조회 참고")
+    st.caption("참고값만 자동 조회합니다. 확인 후 CSV는 직접 업데이트해 주세요.")
+
+    with st.container(border=True):
+        st.markdown("#### 1) PMI")
+        if pmi_data:
+            st.metric(
+                "최신 참고값",
+                f"{pmi_data['value']:.1f}",
+            )
+            st.caption(f"대상 월: {pmi_data.get('period', '-')}")
+            st.caption(f"업데이트 주기: {pmi_data.get('update_cycle', '-')}")
+            st.link_button("PMI 원문 보기", pmi_data["link"], use_container_width=True)
+            st.code(f"{pd.Timestamp.today().strftime('%Y-%m-01')},{pmi_data['value']}", language="text")
+        else:
+            st.warning("PMI 최신 수치를 자동 조회하지 못했습니다.")
+            st.link_button("PMI 원문 보기", TRADING_ECONOMICS_PMI_URL, use_container_width=True)
+
+        st.divider()
+
+        st.markdown("#### 2) 미국 CCI")
+        if cci_data:
+            st.metric(
+                "최신 참고값",
+                f"{cci_data['value']:.1f}",
+            )
+            st.caption(f"대상 월: {cci_data.get('period', '-')}")
+            st.caption(f"업데이트 주기: {cci_data.get('update_cycle', '-')}")
+            st.caption("※ Trading Economics 기준 Michigan Consumer Sentiment 계열일 수 있습니다.")
+            st.link_button("CCI 원문 보기", cci_data["link"], use_container_width=True)
+            st.code(f"{pd.Timestamp.today().strftime('%Y-%m-01')},{cci_data['value']}", language="text")
+        else:
+            st.warning("미국 CCI 최신 수치를 자동 조회하지 못했습니다.")
+            st.link_button("CCI 원문 보기", TRADING_ECONOMICS_CCI_URL, use_container_width=True)
+
 
 def fetch_fred_series(series_id: str, api_key: str, start_date: str = DEFAULT_START_DATE) -> pd.DataFrame:
     params = {
@@ -1451,8 +1570,9 @@ def main() -> None:
         expectations_uploaded = st.file_uploader("Conference Board Expectations CSV 업로드", type=["csv"])
         use_sample_expectations = st.checkbox("Expectations 샘플/데모 사용", value=True)
 
-    with st.expander("PMI / 기대지수 자동 조회 참고", expanded=False):
-        render_manual_update_helper()
+        st.divider()
+        with st.expander("PMI / 미국 CCI 자동 조회 참고", expanded=False):
+            render_te_reference_panel()
 
         show_debug = st.checkbox("디버그 데이터 표시", value=False)
 
